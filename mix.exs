@@ -7,7 +7,9 @@ defmodule FileCache.MixProject do
       version: "0.1.0",
       elixir: "~> 1.13",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases(),
+      preferred_cli_env: [check: :test]
     ]
   end
 
@@ -21,7 +23,19 @@ defmodule FileCache.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nimble_options, "~> 0.3.0"}
+      {:nimble_options, "~> 0.3.0"},
+      {:credo, "~> 1.6", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      check: [
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "credo --all",
+        "test"
+      ]
     ]
   end
 end

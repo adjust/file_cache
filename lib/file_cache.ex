@@ -1,10 +1,12 @@
 defmodule FileCache do
+  @moduledoc """
+  TODO
+  """
   @type id :: term
-  @type cache_name :: atom
+  @type cache :: atom
 
   use Supervisor
 
-  alias FileCache.AsyncPool
   alias FileCache.Temp
   alias FileCache.Perm
   alias FileCache.TempCleaner
@@ -12,180 +14,176 @@ defmodule FileCache do
   alias FileCache.Utils
   alias FileCache.Config
 
-  defp options_schema() do
-    namespace_single_type = {:or, [{:in, [nil, :host]}, {:fun, 0}, :mfa]}
-    namespace_type = {:or, [namespace_single_type, {:list, namespace_single_type}]}
+  namespace_single_type = {:or, [{:in, [nil, :host]}, {:fun, 0}, :mfa]}
+  namespace_type = {:or, [namespace_single_type, {:list, namespace_single_type}]}
 
-    [
-      name: [
-        type: {:custom, FileCache.Common, :validate_cache_name, []},
-        required: true
-      ],
-      dir: [
-        type: :string,
-        required: true
-      ],
-      ttl: [
-        type: :pos_integer,
-        # 1 Hour
-        default: 1 * 60 * 60 * 1000
-      ],
-      namespace: [
-        type: namespace_type,
-        default: nil
-      ],
-      stale_clean_interval: [
-        type: :pos_integer,
-        # 1 Hour
-        default: 1 * 60 * 60 * 1000
-      ],
-      temp_dir: [
-        type: :string,
-        required: true
-      ],
-      # tmp directory: prefix by hostname # for NFS-like storages that might be shared
-      temp_namespace: [
-        type: namespace_type,
-        default: nil
-      ],
-      temp_clean_interval: [
-        type: :pos_integer,
-        # 15 minutes
-        default: 15 * 60 * 1000
-      ]
-    ]
+  @init_options_schema NimbleOptions.new!(
+                         cache: [
+                           type: {:custom, FileCache.Common, :validate_cache_name, []},
+                           required: true
+                         ],
+                         dir: [
+                           type: :string,
+                           required: true
+                         ],
+                         ttl: [
+                           type: :pos_integer,
+                           # 1 Hour
+                           default: 1 * 60 * 60 * 1000
+                         ],
+                         namespace: [
+                           type: namespace_type,
+                           default: nil
+                         ],
+                         stale_clean_interval: [
+                           type: :pos_integer,
+                           # 1 Hour
+                           default: 1 * 60 * 60 * 1000
+                         ],
+                         temp_dir: [
+                           type: :string,
+                           required: true
+                         ],
+                         # tmp directory: prefix by hostname # for NFS-like storages that might be shared
+                         temp_namespace: [
+                           type: namespace_type,
+                           default: nil
+                         ],
+                         temp_clean_interval: [
+                           type: :pos_integer,
+                           # 15 minutes
+                           default: 15 * 60 * 1000
+                         ],
+                         unknown_files: [
+                           type: {:in, [:keep, :remove]},
+                           default: :keep
+                         ],
+                         verbose: [
+                           type: :boolean,
+                           default: false
+                         ]
+                       )
+
+  def start_link(opts) do
+    Supervisor.start_link(__MODULE__, opts)
   end
 
+  @impl true
   def init(opts) do
     config =
       opts
-      |> NimbleOptions.validate!(options_schema())
+      |> Enum.to_list()
+      |> NimbleOptions.validate!(@init_options_schema)
       |> Map.new()
 
-    cache_name = config[:cache_name]
+    cache_name = config[:cache]
 
     Config.store(cache_name, config)
 
+    Temp.setup(config)
+    Perm.setup(config)
+
     children = [
-      [
-        {AsyncPool, cache_name},
-        TempCleaner,
-        StaleCleaner
-      ]
+      {TempCleaner, opts},
+      {StaleCleaner, opts}
     ]
 
-    Supervisor.start_link(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp op_options_schema do
-    [
-      cache: [
-        type: :atom,
-        required: true
-      ],
-      id: [
-        type: :string,
-        required: true
-      ],
-      ttl: [
-        type: :pos_integer
-      ],
-      owner: [
-        type: :pid
-      ],
-      return: [
-        type: {:choice, [:filename, :data]},
-        default: :data
-      ]
-    ]
+  @op_options_schema NimbleOptions.new!(
+                       cache: [
+                         type: :atom,
+                         required: true
+                       ],
+                       ttl: [
+                         type: :pos_integer
+                       ]
+                       # TODO: do we need it? what's the usecase?
+                       # owner: [
+                       #   type: :pid
+                       # ]
+                     )
+
+  defp validate_op_options!(opts) do
+    NimbleOptions.validate!(Enum.to_list(opts), @op_options_schema)
   end
 
-  defp validate_op_options(opts) do
-    NimbleOptions.validate!(opts, op_options_schema())
-  end
+  @doc """
+  Try to read from cache, using data from the provided fallback otherwise
+  """
+  def execute!(enum, id, opts \\ []) do
+    id = validate_id!(id)
+    opts = validate_op_options!(opts)
 
-  # Try to read from cache, using data from the provided fallback otherwise
-  # FileCache.execute(opts, "binary/iolist/stream or fn/0, that returns any of them") # {:ok | :commit | :ignore, filepath} | {:error, _}
-  def execute(enum, id, opts \\ []) do
-    opts = validate_op_options(opts)
-
-    case do_get(id, opts) do
+    case do_get!(id, opts) do
       {:ok, cached_stream} ->
         cached_stream
 
       {:error, :not_found} ->
-        do_put(enum, id, opts)
+        do_put!(enum, id, [clean: false] ++ opts)
     end
   end
 
   # Overwriting execute/2
   # FileCache.put(opts, value) # {:ok, filepath} | {:error, } | no_return
-  def put(enum, id, opts) do
-    do_put(enum, id, validate_op_options(opts))
+  def put!(enum, id, opts) do
+    do_put!(enum, validate_id!(id), validate_op_options!(opts))
   end
 
-  # Returns absolute filepath to cached item (e.g. to use in Plug.Conn.send_file)
-  # This is what must be used by default for sending files as-is over network
-  ### FileCache.get(id) # filepath | nil | no_return
-  # Returns lazy stream by default (or binary if binary: true is provided)
-  ### FileCache.get(id) # (stream | binary) | nil
-  def get(id, opts \\ []) do
-    opts = validate_op_options(opts)
-    cache_name = opts[:cache]
+  @doc """
+  Returns File.Stream of cached data or nil if not found
 
-    Perm.find_for_id(id, cache_name)
+  NOTE: if filepath of the cache is required (e.g. to use in `Plug.Conn.send_file`),
+  it can be fetched with `Map.fetch!(file_stream, :path)`
+  """
+  def get!(id, opts \\ []) do
+    do_get!(validate_id!(id), validate_op_options!(opts))
   end
 
-  # Some obvious operations too
-  # FileCache.exists?(id) # boolean | no_return
   def exists?(id, opts) do
     id
-    |> do_get(validate_op_options(opts))
-    |> Map.fetch!(:path)
-    |> File.exists?()
+    |> validate_id!()
+    |> do_get!(validate_op_options!(opts))
+    |> is_nil()
+    |> Kernel.not()
   end
 
-  # FileCache.del(id) # :ok | no_return
-  def del(id, opts) do
+  def delete!(id, opts) do
+    opts = validate_op_options!(opts)
+
     id
-    |> do_get(validate_op_options(opts))
-    |> Map.fetch!(:path)
-    |> Utils.rm_ignore_missing()
+    |> validate_id!()
+    |> Perm.delete(opts[:cache], opts)
   end
 
-  defp do_put(enum, id, opts) do
+  defp do_put!(enum, id, opts) do
+    {clean?, opts} = Keyword.pop(opts, :clean, true)
     cache_name = opts[:cache]
 
-    StaleCleaner.schedule_clean(id, cache_name)
+    # NOTE: Since for `execute!` we're cleaning perm files during `do_get!`, we can safely skip it here
+    # Otherwise (for `put!`) we need to schedule cleaning
+    clean? && StaleCleaner.schedule_clean(id, cache_name)
 
-    temp_filepath = Temp.file_path(id, opts[:cache], opts)
+    temp_filepath = Temp.file_path(id, cache_name, opts)
+    perm_filepath = Perm.file_path(id, opts[:cache], opts)
 
-    result =
+    :ok =
       enum
       |> data_stream!()
-      |> write_to_temp(temp_filepath)
+      |> write_to_temp!(temp_filepath)
 
-    perm_filepath = Perm.file_path(id, opts[:cache], opts)
-    move_from_temp(temp_filepath, perm_filepath)
+    move_from_temp!(temp_filepath, perm_filepath)
 
-    File.stream!(perm_filepath, [:binary], :byte)
-
-    # 0. Check if it is present in cache, return if it is, otherwise...
-    # 1. get stream/list/fun
-    # 2. write data to temp file if list, stream-write to temp file otherwise
-    # 3. As soon as data is finished, move temp file to perm location
-    # 4. Remove stale files based on timestamp
+    # TODO: pass :line | integer_of_bytes option here somehow
+    File.stream!(perm_filepath, [:binary])
   end
 
-  defp do_get(id, opts) do
-    cache_name = opts[:cache]
-    # 1. Get a list of all files like pattern
-    # 2. Sort by order (higher timestamp goes first)
-    # 3. Try evaluating one by one
-    # 4. As soon as one is found, remove the rest
-
-    # NOTE that we do this to
-    # StaleCleaner.schedule_file_removal(files)
+  defp do_get!(id, opts) do
+    case Perm.find(id, opts[:cache], opts) do
+      nil -> nil
+      path -> File.stream!(path)
+    end
   end
 
   defp data_stream!(fun) when is_function(fun, 0) do
@@ -212,30 +210,27 @@ defmodule FileCache do
     end
   end
 
-  defp write_to_temp(enum, filepath) do
-    # TODO: any rescue wrappers?
+  defp write_to_temp!(enum, filepath) do
     case enum do
       iodata when is_list(iodata) or is_binary(iodata) ->
         File.write!(filepath, iodata, [:binary])
 
       stream ->
-        Enum.into(stream, File.stream!(filepath, [:binary], :byte))
+        _ = Enum.into(stream, File.stream!(filepath, [:binary]))
+        :ok
     end
   end
 
-  defp move_from_temp(temp_path, perm_path) do
-    # try do
-    #   File.rename!()
-    # end
-  end
-
-  def remove_stale_files(id) do
-    # 1. list all files containing id sorted by timestamp
-    # 2. Remove the stale ones (async)
+  defp move_from_temp!(temp_path, perm_path) do
+    File.rename!(temp_path, perm_path)
+  rescue
+    e in File.RenameError ->
+      Utils.rm_ignore_missing(temp_path)
+      reraise e, __STACKTRACE__
   end
 
   defp validate_id!(id) do
-    with :ok <- Utils.validate_filepath(id) do
+    with :ok <- Utils.validate_dirname(id) do
       id
     else
       {:error, reason} ->

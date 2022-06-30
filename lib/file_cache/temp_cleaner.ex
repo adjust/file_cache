@@ -1,12 +1,15 @@
 defmodule FileCache.TempCleaner do
-  use FileCache.Cleaner
+  @moduledoc false
+
+  use FileCache.Cleaner, kind: :temp
 
   alias FileCache.Config
   alias FileCache.Temp
+  alias FileCache.Common
   alias FileCache.Utils
 
   @impl true
-  def cleanup(%S{cache_name: cache_name} = s) do
+  def cleanup(%S{cache: cache_name}) do
     cache_name
     |> Temp.wildcard()
     |> maybe_remove_files(cache_name)
@@ -22,14 +25,13 @@ defmodule FileCache.TempCleaner do
   end
 
   defp file_to_remove?(path, cache_name) do
-    try do
-      Temp.parse_filepath(path)
-    rescue
-      e ->
-        Logger.error("Failed to parse temp file for cache #{cache_name}: #{Exception.message(e)}")
-    else
-      %{pid: pid} ->
+    case Temp.parse_filepath(path, cache_name) do
+      {:ok, %{pid: pid}} ->
         not Process.alive?(pid)
+
+      {:error, _} ->
+        Common.maybe_remove_unknown_file(path, cache_name)
+        false
     end
   end
 end
