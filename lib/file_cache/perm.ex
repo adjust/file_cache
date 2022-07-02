@@ -3,6 +3,8 @@ defmodule FileCache.Perm do
 
   require Logger
 
+  @sep "$"
+
   alias FileCache.Config
   alias FileCache.Common
   alias FileCache.Utils
@@ -81,7 +83,7 @@ defmodule FileCache.Perm do
 
     expiration_timestamp = Utils.system_time() + ttl
 
-    filename = "#{filename_prefix()}_#{expiration_timestamp}_#{id}"
+    filename = "#{filename_prefix()}#{@sep}#{expiration_timestamp}#{@sep}#{id}"
 
     Path.join(full_dir_path(cache_name), filename)
   end
@@ -89,14 +91,14 @@ defmodule FileCache.Perm do
   def wildcard(cache_name, id \\ nil) do
     cache_name
     |> full_dir_path()
-    |> Path.join("#{filename_prefix()}_")
+    |> Path.join("#{filename_prefix()}#{@sep}")
     |> Utils.escape_path_for_wildcard()
     |> case do
       asis when is_nil(id) or id == :all ->
         Utils.wildcard_suffix(asis)
 
       left ->
-        Path.wildcard("#{left}*_#{Utils.escape_path_for_wildcard(id)}")
+        Path.wildcard("#{left}*$#{Utils.escape_path_for_wildcard(id)}")
     end
   end
 
@@ -117,7 +119,7 @@ defmodule FileCache.Perm do
     # NOTE: note the `parts: 3`: because ID can contain underscores, we put it specifically in the end
     # to avoid splitting it by accident
 
-    with [prefix, expiration_timestamp_str, id] <- String.split(filename, "_", parts: 3),
+    with [prefix, expiration_timestamp_str, id] <- String.split(filename, @sep, parts: 3),
          {:ok, _prefix} <- parse_prefix(prefix),
          {:ok, expiration_timestamp} <- parse_timestamp(expiration_timestamp_str) do
       {:ok,

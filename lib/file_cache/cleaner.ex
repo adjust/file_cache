@@ -58,7 +58,7 @@ defmodule FileCache.Cleaner do
       end
 
       @spec handle_info(any, t) :: {:noreply, t}
-      def handle_info(:cleanup, state) do
+      def handle_info({:timeout, timer, :cleanup}, %{timer: timer} = state) do
         {:noreply, cleanup_and_schedule(state)}
       end
 

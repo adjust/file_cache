@@ -5,6 +5,8 @@ defmodule FileCache.Temp do
   alias FileCache.Common
   alias FileCache.Utils
 
+  @sep "$"
+
   # File path format:
   # /temp_dir/namespace.../cache_name/tmp_file_cache_<OWNER_PID>_<UNIQUE_NUM>_<ID>
 
@@ -14,7 +16,7 @@ defmodule FileCache.Temp do
     owner = Access.get(opts, :owner, self())
 
     filename =
-      "#{filename_prefix()}_#{Utils.pid_to_string(owner)}_#{:erlang.unique_integer()}_#{id}"
+      "#{filename_prefix()}#{@sep}#{Utils.pid_to_string(owner)}#{@sep}#{:erlang.unique_integer()}_#{id}"
 
     Path.join(full_dir_path(cache_name), filename)
   end
@@ -22,7 +24,7 @@ defmodule FileCache.Temp do
   def wildcard(cache_name) do
     cache_name
     |> full_dir_path()
-    |> Path.join("#{filename_prefix()}_")
+    |> Path.join("#{filename_prefix()}#{@sep}")
     |> Utils.wildcard_suffix()
   end
 
@@ -42,7 +44,7 @@ defmodule FileCache.Temp do
 
     # NOTE: note the `parts: 4`: because ID can contain underscores, we put it specifically in the end
     # to avoid splitting it by accident
-    with [prefix, pid_str, _uniq_id, id] <- String.split(filename, "_", parts: 4),
+    with [prefix, pid_str, _uniq_id, id] <- String.split(filename, @sep, parts: 4),
          {:ok, _prefix} <- parse_prefix(prefix),
          {:ok, pid} <- parse_pid(pid_str) do
       {:ok,
@@ -81,6 +83,6 @@ defmodule FileCache.Temp do
   end
 
   def filename_prefix do
-    "tmp-file-cache"
+    "temp-file-cache"
   end
 end

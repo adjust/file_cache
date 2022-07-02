@@ -117,11 +117,11 @@ defmodule FileCache do
     opts = validate_op_options!(opts)
 
     case do_get!(id, opts) do
-      {:ok, cached_stream} ->
-        cached_stream
-
-      {:error, :not_found} ->
+      nil ->
         do_put!(enum, id, [clean: false] ++ opts)
+
+      cached_stream ->
+        cached_stream
     end
   end
 
@@ -158,25 +158,35 @@ defmodule FileCache do
   end
 
   defp do_put!(enum, id, opts) do
-    {clean?, opts} = Keyword.pop(opts, :clean, true)
+    {preclean?, opts} = Keyword.pop(opts, :preclean, true)
     cache_name = opts[:cache]
 
     # NOTE: Since for `execute!` we're cleaning perm files during `do_get!`, we can safely skip it here
     # Otherwise (for `put!`) we need to schedule cleaning
-    clean? && StaleCleaner.schedule_clean(id, cache_name)
+    #
+    # Why preclean? Just to save some space
+    preclean? && StaleCleaner.schedule_clean(id, cache_name)
 
     temp_filepath = Temp.file_path(id, cache_name, opts)
     perm_filepath = Perm.file_path(id, opts[:cache], opts)
 
-    :ok =
-      enum
-      |> data_stream!()
-      |> write_to_temp!(temp_filepath)
+    try do
+      :ok =
+        enum
+        |> data_stream!()
+        |> write_to_temp!(temp_filepath)
 
-    move_from_temp!(temp_filepath, perm_filepath)
+      File.rename!(temp_filepath, perm_filepath)
 
-    # TODO: pass :line | integer_of_bytes option here somehow
-    File.stream!(perm_filepath, [:binary])
+      # NOTE: Since previous clean above we added fresher data,
+      # so let's ensure that now-irrelevant cache-file is cleaned
+      StaleCleaner.schedule_clean(id, cache_name)
+
+      # TODO: pass :line | integer_of_bytes option here somehow
+      File.stream!(perm_filepath)
+    after
+      Utils.rm_ignore_missing(temp_filepath)
+    end
   end
 
   defp do_get!(id, opts) do
@@ -216,17 +226,9 @@ defmodule FileCache do
         File.write!(filepath, iodata, [:binary])
 
       stream ->
-        _ = Enum.into(stream, File.stream!(filepath, [:binary]))
+        _ = Enum.into(stream, File.stream!(filepath))
         :ok
     end
-  end
-
-  defp move_from_temp!(temp_path, perm_path) do
-    File.rename!(temp_path, perm_path)
-  rescue
-    e in File.RenameError ->
-      Utils.rm_ignore_missing(temp_path)
-      reraise e, __STACKTRACE__
   end
 
   defp validate_id!(id) do
