@@ -6,19 +6,19 @@ defmodule FileCache.Common do
   alias FileCache.Config
   alias FileCache.Utils
 
-  def calculate_namespace(nil), do: ""
-
-  def calculate_namespace(many) when is_list(many) do
-    many
-    |> Enum.map(&do_calculate_namespace/1)
+  def calculate_namespace(namespace) do
+    namespace
+    |> List.wrap()
+    |> Enum.map(fn part -> validate_namespace_part(do_calculate_namespace(part)) end)
+    |> List.insert_at(0, "")
     |> Path.join()
   end
 
-  def calculate_namespace(other), do: do_calculate_namespace(other)
+  defp do_calculate_namespace(str) when is_binary(str), do: str
 
   defp do_calculate_namespace(:host) do
     {:ok, host} = :inet.gethostname()
-    host
+    IO.chardata_to_string(host)
   end
 
   defp do_calculate_namespace({m, f, a}), do: apply(m, f, a)

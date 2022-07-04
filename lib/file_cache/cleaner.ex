@@ -13,7 +13,7 @@ defmodule FileCache.Cleaner do
   @optional_callbacks name: 1
 
   defmacro __using__(opts) do
-    kind = opts[:kind]
+    kind = Keyword.fetch!(opts, :kind)
 
     quote do
       use GenServer

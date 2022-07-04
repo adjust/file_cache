@@ -14,7 +14,7 @@ defmodule FileCache do
   alias FileCache.Utils
   alias FileCache.Config
 
-  namespace_single_type = {:or, [{:in, [nil, :host]}, {:fun, 0}, :mfa]}
+  namespace_single_type = {:or, [{:in, [nil, :host]}, :string, {:fun, 0}, :mfa]}
   namespace_type = {:or, [namespace_single_type, {:list, namespace_single_type}]}
 
   @init_options_schema NimbleOptions.new!(
@@ -99,10 +99,6 @@ defmodule FileCache do
                        ttl: [
                          type: :pos_integer
                        ]
-                       # TODO: do we need it? what's the usecase?
-                       # owner: [
-                       #   type: :pid
-                       # ]
                      )
 
   defp validate_op_options!(opts) do

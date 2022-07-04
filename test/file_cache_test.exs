@@ -4,13 +4,15 @@ defmodule FileCacheTest do
 
   import FileCacheTest.Helpers
 
+  @temp_prefix "temp-file-cache"
+  @cache_prefix "perm-file-cache"
   @key "key"
 
   defp setup_cache(opts \\ []) do
     cache = start_cache(opts)
     on_exit(fn -> clean_cache(cache) end)
 
-    [cache: cache]
+    Keyword.merge(opts, cache: cache)
   end
 
   describe "put! & get!" do
@@ -54,14 +56,12 @@ defmodule FileCacheTest do
       # not deleted after `get!`: not yet expired
       assert content == read!(prev.path)
 
-      # wait till expiration
-      sleep(ttl)
+      wait(ttl)
 
       # trigger cleanup
       refute FileCache.get!(@key, opts(c))
 
-      # wait some time for async cleanup
-      wait_for_async_cleaning()
+      wait_for_cleaning()
 
       refute File.exists?(prev.path)
     end
@@ -74,20 +74,18 @@ defmodule FileCacheTest do
       previous = FileCache.put!(previous_content, @key, opts(c))
       assert previous_content == read!(previous.path)
 
-      # precautious step, since TTL resolution is 1 ms
       wait_for_new_timestamp()
       current = FileCache.put!(current_content, @key, opts(c))
       assert current_content == read!(current)
 
-      # wait some time for async cleanup
-      wait_for_async_cleaning()
+      wait_for_cleaning()
 
       assert current_content == read!(current)
       refute File.exists?(previous.path)
       assert [_] = find_cache_files(opts(c))
     end
 
-    test "when stream crashes, partial results are not visible and no files ", c do
+    test "when stream crashes, partial results are not visible", c do
       assert catch_throw(FileCache.put!(explosive_stream(), @key, opts(c))) == :explode
       refute FileCache.get!(@key, opts(c))
     end
@@ -162,23 +160,20 @@ defmodule FileCacheTest do
       assert [] == find_cache_files(opts(c))
     end
 
-    test "doesn't delete cache that was in computation when deletion took place", c do
-      content = 1..5
-      error = 100
+    test "doesn't delete in-flight cache", c do
+      data = 1..10
       stream_interval = 100
 
       assert FileCache.put!(binary(), @key, opts(c))
       assert binary() == read!(FileCache.get!(@key, opts(c)))
 
-      Task.start_link(fn ->
-        FileCache.put!(slow_stream(content, stream_interval), @key, opts(c))
-      end)
+      async(FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
 
       assert :ok == FileCache.delete!(@key, opts(c))
       refute FileCache.get!(@key, opts(c))
 
-      sleep(error + Enum.count(content) * stream_interval)
-      assert binary(content) == read!(FileCache.get!(@key, opts(c)))
+      wait_for_slow_stream(data, stream_interval)
+      assert binary(data) == read!(FileCache.get!(@key, opts(c)))
     end
   end
 
@@ -202,19 +197,31 @@ defmodule FileCacheTest do
       c = setup_cache(unknown_files: :remove, temp_clean_interval: temp_clean_interval)
 
       wrong_temp_file =
-        Path.join([temp_dir(c[:cache]), "#{c[:cache]}", "temp-file-cache$_$_$#{@key}"])
+        Path.join([temp_dir(c[:cache]), "#{c[:cache]}", "#{@temp_prefix}$_$_$#{@key}"])
 
-      wrong_cache_file = Path.join([dir(c[:cache]), "#{c[:cache]}", "perm-file-cache$_$#{@key}"])
+      wrong_cache_file = Path.join([dir(c[:cache]), "#{c[:cache]}", "#{@cache_prefix}$_$#{@key}"])
 
       assert FileCache.put!(binary(), @key, opts(c))
       assert binary() == read!(FileCache.get!(@key, opts(c)))
 
-      File.write!(wrong_temp_file, "")
-      File.write!(wrong_cache_file, "")
+      File.touch!(wrong_temp_file)
+      File.touch!(wrong_cache_file)
 
-      assert binary() == read!(FileCache.get!(@key, opts(c)))
-      wait_for_async_cleaning()
-      sleep(temp_clean_interval)
+      assert_logs(
+        [
+          {:error,
+           "FileCache (#{c[:cache]}): Incorrect filepath timestamp: " <>
+             "/tmp/file_cache_test_#{c[:cache]}/perm/#{c[:cache]}/#{@cache_prefix}$_$#{@key}"},
+          {:error,
+           "FileCache (#{c[:cache]}): Incorrect temp filepath pid: " <>
+             "/tmp/file_cache_test_#{c[:cache]}/temp/#{c[:cache]}/#{@temp_prefix}$_$_$#{@key}"}
+        ],
+        fn ->
+          assert binary() == read!(FileCache.get!(@key, opts(c)))
+          wait_for_cleaning(temp_clean_interval)
+        end,
+        order: false
+      )
 
       refute File.exists?(wrong_temp_file)
       refute File.exists?(wrong_cache_file)
@@ -222,39 +229,207 @@ defmodule FileCacheTest do
   end
 
   describe "init option :namespace" do
+    test "no dirs when empty" do
+      # [] and nil are essentially the same
+      c = setup_cache(namespace: [])
+      assert FileCache.put!(binary(), @key, opts(c))
+      assert [_] = File.ls!(Path.join([dir(c[:cache]), "#{c[:cache]}"]))
+    end
+
+    test "support all namespace parts (:host, mfa, fun/0, binary)" do
+      {:ok, host} = :inet.gethostname()
+
+      c =
+        setup_cache(
+          namespace: [
+            :host,
+            "cache_sample_dir",
+            {FileCacheTest.Helpers, :namespace_fun, ["calculated_cache_dirname"]},
+            fn -> "another_cache_dirname" end
+          ]
+        )
+
+      assert FileCache.put!(binary(), @key, opts(c))
+
+      assert [_] =
+               File.ls!(
+                 Path.join([
+                   dir(c[:cache]),
+                   "#{host}",
+                   "cache_sample_dir",
+                   "calculated_cache_dirname",
+                   "another_cache_dirname",
+                   "#{c[:cache]}"
+                 ])
+               )
+    end
   end
 
   describe "init option :temp_namespace" do
+    test "no dirs when empty" do
+      data = 1..5
+      stream_interval = 100
+      # [] and nil are essentially the same
+      c = setup_cache(temp_namespace: nil)
+
+      async(assert FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
+      wait(stream_interval)
+      assert [_] = File.ls!(Path.join([temp_dir(c[:cache]), "#{c[:cache]}"]))
+    end
+
+    test "support all namespace parts (:host, mfa, fun/0, binary)" do
+      {:ok, host} = :inet.gethostname()
+      data = 1..5
+      stream_interval = 100
+
+      c =
+        setup_cache(
+          temp_namespace: [
+            :host,
+            "temp_sample_dir",
+            {FileCacheTest.Helpers, :namespace_fun, ["calculated_temp_dirname"]},
+            fn -> "another_temp_dirname" end
+          ]
+        )
+
+      async(assert FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
+      wait(stream_interval)
+
+      assert [_] =
+               File.ls!(
+                 Path.join([
+                   temp_dir(c[:cache]),
+                   "#{host}",
+                   "temp_sample_dir",
+                   "calculated_temp_dirname",
+                   "another_temp_dirname",
+                   "#{c[:cache]}"
+                 ])
+               )
+    end
   end
 
   describe "init option :ttl" do
+    test "short-lived cache is deleted almost instantly" do
+      c = setup_cache(ttl: 1)
+      assert s = %File.Stream{} = FileCache.put!(binary(), @key, opts(c))
+      wait_for_cleaning(1000)
+      refute File.exists?(s.path)
+      refute read!(s)
+    end
   end
 
   describe "init option :verbose" do
+    test "no logs when false" do
+      assert_logs([], fn ->
+        setup_cache(verbose: false)
+        wait_for_cleaning()
+      end)
+    end
+
+    test "logs cleaning start when true" do
+      name = String.to_atom(random_string())
+
+      assert_logs(
+        [
+          {:info, "Starting stale cleanup for #{name}"},
+          {:info, "Starting temp cleanup for #{name}"}
+        ],
+        fn ->
+          setup_cache(cache: name, verbose: true)
+          wait_for_cleaning()
+        end,
+        order: false
+      )
+    end
   end
 
   describe "execute/put option :ttl" do
+    test "overrides global ttl" do
+      c = setup_cache(ttl: 1)
+
+      assert FileCache.put!(binary(), @key, opts(c))
+      wait_for_new_timestamp()
+      refute FileCache.get!(@key, opts(c))
+
+      assert FileCache.put!(binary(), @key, opts(c, ttl: 60_000))
+      assert binary() == read!(FileCache.get!(@key, opts(c)))
+    end
   end
 
   describe "StaleCleaner" do
-    test "deletes all expired files", c do
+    test "deletes all expired files" do
+      c = setup_cache(ttl: 1000)
+      ids = Enum.map(1..5, &to_string/1)
+      Enum.each(ids, fn i -> assert FileCache.put!(binary(), i, opts(c)) end)
+      Enum.each(ids, fn i -> assert binary() == read!(FileCache.get!(i, opts(c))) end)
+
+      wait(c[:ttl])
+      restart_cache(opts(c))
+      wait_for_cleaning()
+      Enum.each(ids, fn i -> refute FileCache.get!(i, opts(c)) end)
     end
 
-    test "deletes obsolete files when more fresh one is available", c do
+    test "deletes obsolete files when more fresh one is available" do
+      c = setup_cache()
+      data = 1..5
+      stream_interval = 100
+      async(assert FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
+      async(assert FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
+      wait_for_slow_stream(data, stream_interval)
+      restart_cache(c)
+      assert [_] = find_cache_files(c)
     end
 
-    test "is configured with :stale_clean_interval", c do
+    test "is configured with :stale_clean_interval" do
+      stale_clean_interval = 1000
+
+      c =
+        setup_cache(ttl: div(stale_clean_interval, 2), stale_clean_interval: stale_clean_interval)
+
+      wait_for_cleaning()
+      assert FileCache.put!(binary(), @key, opts(c))
+      assert binary() == read!(FileCache.get!(@key, opts(c)))
+      wait(stale_clean_interval)
+
+      refute FileCache.get!(@key, opts(c))
     end
   end
 
   describe "TempCleaner" do
-    test "doesn't delete in-progress temp file", c do
+    test "doesn't delete in-progress temp file and is configured with :temp_clean_interval" do
+      temp_clean_interval = 100
+      data = 1..5
+      stream_interval = 100
+      c = setup_cache(temp_clean_interval: temp_clean_interval)
+      async(assert FileCache.put!(slow_stream(data, stream_interval), @key, opts(c)))
+      wait()
+      assert [_] = find_cache_files(c)
+      wait_for_slow_stream(data, stream_interval)
+      assert [_] = find_cache_files(c)
+      assert FileCache.get!(@key, opts(c))
     end
 
-    test "removes temp file of a dead process", c do
+    test "removes temp file of a dead process" do
+      temp_clean_interval = 200
+      c = setup_cache(temp_clean_interval: temp_clean_interval)
+      pid = async(FileCache.put!(slow_stream(), @key, opts(c)))
+      wait()
+      assert [_] = find_cache_files(c)
+      assert_kill(pid)
+
+      wait(temp_clean_interval)
+      assert [] == find_cache_files(c)
     end
 
-    test "is configured with :temp_clean_interval", c do
+    test "removes the waste if stream has exited" do
+      temp_clean_interval = 100
+      c = setup_cache(temp_clean_interval: temp_clean_interval)
+      Process.flag(:trap_exit, true)
+      pid = async(FileCache.put!(self_terminating_stream(), @key, opts(c)))
+      wait(temp_clean_interval)
+      assert_received {:EXIT, ^pid, :killed}
+      assert [] == find_cache_files(opts(c))
     end
   end
 end

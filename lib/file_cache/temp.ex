@@ -16,7 +16,7 @@ defmodule FileCache.Temp do
     owner = Access.get(opts, :owner, self())
 
     filename =
-      "#{filename_prefix()}#{@sep}#{Utils.pid_to_string(owner)}#{@sep}#{:erlang.unique_integer()}_#{id}"
+      "#{filename_prefix()}#{@sep}#{Utils.pid_to_string(owner)}#{@sep}#{:erlang.unique_integer()}#{@sep}#{id}"
 
     Path.join(full_dir_path(cache_name), filename)
   end
@@ -76,7 +76,7 @@ defmodule FileCache.Temp do
   end
 
   defp parse_pid(pid_str) do
-    :erlang.list_to_pid('<#{pid_str}>')
+    {:ok, :erlang.list_to_pid('<#{pid_str}>')}
   rescue
     ArgumentError ->
       {:error, :bad_pid}

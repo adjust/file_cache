@@ -1,7 +1,7 @@
 defmodule FileCache.StaleCleaner do
   @moduledoc false
 
-  use FileCache.Cleaner
+  use FileCache.Cleaner, kind: :stale
 
   alias FileCache.Config
   alias FileCache.Perm
