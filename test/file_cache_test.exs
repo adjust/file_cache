@@ -117,6 +117,40 @@ defmodule FileCacheTest do
     end
   end
 
+  describe "get_record!" do
+    setup do
+      setup_cache(ttl: 60_000)
+    end
+
+    test "returns nil for missing key", c do
+      assert nil == FileCache.get_record!("not_exist", opts(c))
+    end
+
+    test "get complete record about cache file", c do
+      data = 1..10
+
+      start_timestamp = FileCache.Utils.system_time()
+      assert binary(data) == read!(FileCache.put!(binary(data), @key, opts(c)))
+
+      assert %FileCache.Record{
+               id: id,
+               path: path,
+               stream: stream,
+               expires_at: expires_at,
+               ttl: ttl
+             } = FileCache.get_record!(@key, opts(c))
+
+      assert @key == id
+      assert binary(data) == read!(stream)
+      assert binary(data) == read!(File.stream!(path))
+
+      assert 59_000 <= ttl and ttl < 61_000
+
+      test_ttl = expires_at - start_timestamp
+      assert 59_000 <= test_ttl and test_ttl < 61_000
+    end
+  end
+
   describe "execute!" do
     setup do
       setup_cache()

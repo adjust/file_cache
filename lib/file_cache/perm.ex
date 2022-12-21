@@ -25,8 +25,7 @@ defmodule FileCache.Perm do
     #
     # So for the time being, we are finding (and cleaning) *all* files with the suffix of `id`
 
-    result = find_all(id, cache_name, opts)[id]
-    result && result[:path]
+    find_all(id, cache_name, opts)[id]
   end
 
   def find_all(cache_name), do: find_all(cache_name, [])
@@ -40,9 +39,7 @@ defmodule FileCache.Perm do
     now = Utils.system_time()
     {sync_clean?, _opts} = Keyword.pop(opts, :sync_clean, false)
 
-    cache_name
-    |> wildcard(id)
-    |> Enum.reduce(%{}, fn path, acc ->
+    reduce_all(id, cache_name, %{}, fn path, acc ->
       with {:ok, this} <- parse_filepath(path, cache_name) do
         exp = this.expires_at
         last = Map.get(acc, this.id)
@@ -65,6 +62,12 @@ defmodule FileCache.Perm do
           acc
       end
     end)
+  end
+
+  def reduce_all(id, cache_name, acc, fun) do
+    cache_name
+    |> wildcard(id)
+    |> Enum.reduce(acc, fun)
   end
 
   def delete(id, cache_name, _opts) do

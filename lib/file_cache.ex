@@ -137,6 +137,16 @@ defmodule FileCache do
     do_get!(validate_id!(id), validate_op_options!(opts))
   end
 
+  @doc """
+  Works as `get!/2`, but returns all data about cache file: path, expiration, etc.
+
+  Useful when it's required to set HTTP's Cache-Control header
+  or work with cache file manually (e.g. pass its path to external program)
+  """
+  def get_record!(id, opts \\ []) do
+    do_get_record!(validate_id!(id), validate_op_options!(opts))
+  end
+
   def exists?(id, opts) do
     id
     |> validate_id!()
@@ -186,9 +196,20 @@ defmodule FileCache do
   end
 
   defp do_get!(id, opts) do
-    case Perm.find(id, opts[:cache], opts) do
-      nil -> nil
-      path -> File.stream!(path)
+    with result when is_map(result) <- Perm.find(id, opts[:cache], opts) do
+      File.stream!(result.path)
+    end
+  end
+
+  def do_get_record!(id, opts) do
+    with result when is_map(result) <- Perm.find(id, opts[:cache], opts) do
+      %FileCache.Record{
+        id: result.id,
+        path: result.path,
+        expires_at: result.expires_at,
+        ttl: result.expires_at - Utils.system_time(),
+        stream: File.stream!(result.path)
+      }
     end
   end
 
