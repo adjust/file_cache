@@ -347,7 +347,7 @@ defmodule FileCacheTest do
     test "short-lived cache is deleted almost instantly" do
       c = setup_cache(ttl: 1)
       assert s = %File.Stream{} = FileCache.put!(binary(), @key, opts(c))
-      wait_for_cleaning(1000)
+      wait_for_cleaning(2000)
       refute File.exists?(s.path)
       refute read!(s)
     end
@@ -388,6 +388,86 @@ defmodule FileCacheTest do
 
       assert FileCache.put!(binary(), @key, opts(c, ttl: 60_000))
       assert binary() == read!(FileCache.get!(@key, opts(c)))
+    end
+  end
+
+  describe "stats/1" do
+    setup do
+      setup_cache()
+    end
+
+    test "returns correct stats + config for the cache", c do
+      fast_iters = 10
+      slow_iters = 3
+
+      init_stats = FileCache.stats(opts(c))
+      assert %{current: 0, in_progress: 0} == init_stats
+
+      for i <- 1..fast_iters, do: FileCache.put!(binary(), "fast-#{i}", opts(c))
+      for i <- 1..slow_iters, do: async(FileCache.put!(slow_stream(), "slow-#{i}", opts(c)))
+      wait_for_slow_stream(1..1)
+
+      stats = FileCache.stats(opts(c))
+      assert %{current: fast_iters, in_progress: slow_iters} == stats
+    end
+  end
+
+  describe "config/1" do
+    test "returns correct (default) config" do
+      c = setup_cache()
+
+      stats = FileCache.config(opts(c))
+      assert match?(%{cache: _}, stats)
+
+      assert %{
+               cache: stats.cache,
+               dir: "/tmp/file_cache_test_#{stats.cache}/perm",
+               namespace: nil,
+               stale_clean_interval: 3_600_000,
+               temp_clean_interval: 900_000,
+               temp_dir: "/tmp/file_cache_test_#{stats.cache}/temp",
+               temp_namespace: nil,
+               ttl: 3_600_000,
+               unknown_files: :keep,
+               verbose: false
+             } == stats
+    end
+
+    test "returns correct config for all changed values" do
+      cache = :my_custom_cache
+
+      settings = [
+        cache: cache,
+        dir: "/tmp/file_cache_test_#{cache}_dir",
+        ttl: 42,
+        namespace: :host,
+        stale_clean_interval: 123,
+        temp_dir: "/tmp/file_cache_test_#{cache}_temp_dir",
+        temp_namespace: "temp_namespace",
+        temp_clean_interval: 1337,
+        unknown_files: :remove,
+        verbose: true
+      ]
+
+      _ = setup_cache(settings)
+
+      assert Map.new(settings) == FileCache.config(cache: cache)
+    end
+  end
+
+  describe "clean/1" do
+    setup do
+      setup_cache()
+    end
+
+    test "cleans and writes w/o problems after that", c do
+      range = 1..10
+      for i <- range, do: FileCache.put!(binary(), "#{i}", opts(c))
+      assert :ok == FileCache.clean(opts(c))
+      for i <- range, do: assert(nil == FileCache.get!("#{i}", opts(c)))
+
+      for i <- range, do: FileCache.put!(binary(), "#{i}", opts(c))
+      for i <- range, do: assert(binary() == read!(FileCache.get!("#{i}", opts(c))))
     end
   end
 

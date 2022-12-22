@@ -146,7 +146,7 @@ defmodule FileCacheTest.Helpers do
     sleep(time)
   end
 
-  def wait_for_slow_stream(data, interval) do
+  def wait_for_slow_stream(data \\ 1..10, interval \\ 1_000) do
     wait(Enum.count(data) * interval)
   end
 

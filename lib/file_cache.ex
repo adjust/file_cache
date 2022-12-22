@@ -91,15 +91,25 @@ defmodule FileCache do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
+  @common_options_schema NimbleOptions.new!(
+                           cache: [
+                             type: :atom,
+                             required: true
+                           ]
+                         )
+
   @op_options_schema NimbleOptions.new!(
-                       cache: [
-                         type: :atom,
-                         required: true
-                       ],
-                       ttl: [
-                         type: :pos_integer
-                       ]
+                       @common_options_schema.schema ++
+                         [
+                           ttl: [
+                             type: :pos_integer
+                           ]
+                         ]
                      )
+
+  defp validate_common_options!(opts) do
+    NimbleOptions.validate!(Enum.to_list(opts), @common_options_schema)
+  end
 
   defp validate_op_options!(opts) do
     NimbleOptions.validate!(Enum.to_list(opts), @op_options_schema)
@@ -156,11 +166,45 @@ defmodule FileCache do
   end
 
   def delete!(id, opts) do
-    opts = validate_op_options!(opts)
+    opts = validate_common_options!(opts)
 
     id
     |> validate_id!()
     |> Perm.delete(opts[:cache], opts)
+  end
+
+  @doc """
+  Clean cache by removing all cache files.
+
+  NOTE: In-progress caching operations are not interrupted, i.e. temporary files will not be deleted.
+  """
+  def clean(opts) do
+    opts = validate_common_options!(opts)
+
+    opts[:cache]
+    |> Perm.find_all(sync_clean?: true)
+    |> Enum.each(fn {_id, record} -> Utils.rm_ignore_missing(record.path) end)
+  end
+
+  @doc """
+  Get current statistics for the cache:
+  - `current`: current number of cache files
+  - `in_progress`: number of cache writes running right now
+  """
+  def stats(opts) do
+    opts = validate_common_options!(opts)
+
+    %{
+      current: Enum.count(Perm.find_all(opts[:cache])),
+      in_progress: Enum.count(Temp.wildcard(opts[:cache]))
+    }
+  end
+
+  @doc """
+  Get configuration of the cache reflecting its initial configuration
+  """
+  def config(opts) do
+    FileCache.Config.get(validate_common_options!(opts)[:cache])
   end
 
   defp do_put!(enum, id, opts) do
