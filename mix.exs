@@ -23,7 +23,7 @@ defmodule FileCache.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nimble_options, "~> 0.3.0"},
+      {:nimble_options, "~> 0.4"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false}
     ]
   end
