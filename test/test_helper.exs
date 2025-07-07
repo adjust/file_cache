@@ -1,4 +1,6 @@
 defmodule FileCacheTest.Helpers do
+  import ExUnit.Assertions
+
   def start_cache(opts \\ []) do
     opts = Map.new(opts)
 
@@ -48,7 +50,7 @@ defmodule FileCacheTest.Helpers do
   def random_string do
     :rand.uniform()
     |> to_string()
-    |> String.slice(2..-1)
+    |> String.slice(2..-1//1)
     |> Base.encode64()
   end
 
@@ -187,7 +189,7 @@ defmodule FileCacheTest.Helpers do
       |> String.split("\n", trim: true)
       |> Enum.map(fn entry ->
         [_timestamp, level, message] = String.split(entry, ~r/ +/, parts: 3)
-        {String.to_atom(String.slice(level, 1..-2)), message}
+        {String.to_atom(String.slice(level, 1..-2//1)), message}
       end)
 
     case Keyword.get(opts, :order, true) do
@@ -205,14 +207,12 @@ defmodule FileCacheTest.Helpers do
   end
 
   def assert_kill(pid, reason \\ :kill) do
-    import ExUnit.Assertions
-
     Process.flag(:trap_exit, true)
     Process.exit(pid, reason)
 
     case reason do
-      :kill -> ExUnit.Assertions.assert_receive({:EXIT, ^pid, :killed})
-      other -> ExUnit.Assertions.assert_receive({:EXIT, ^pid, ^other})
+      :kill -> assert_receive({:EXIT, ^pid, :killed})
+      other -> assert_receive({:EXIT, ^pid, ^other})
     end
 
     Process.flag(:trap_exit, false)

@@ -76,7 +76,7 @@ defmodule FileCache.Temp do
   end
 
   defp parse_pid(pid_str) do
-    {:ok, :erlang.list_to_pid('<#{pid_str}>')}
+    {:ok, :erlang.list_to_pid(~c"<#{pid_str}>")}
   rescue
     ArgumentError ->
       {:error, :bad_pid}

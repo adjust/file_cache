@@ -16,7 +16,7 @@ defmodule FileCache.Utils do
   def pid_to_string(pid) when is_pid(pid) do
     pid
     |> inspect()
-    |> String.slice(5..-2)
+    |> String.slice(5..-2//1)
   end
 
   def rm_ignore_missing(path) when is_binary(path) or is_list(path) do
