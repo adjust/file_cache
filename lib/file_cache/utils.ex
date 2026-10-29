@@ -38,7 +38,7 @@ defmodule FileCache.Utils do
     System.convert_time_unit(System.os_time(), :native, unit)
   end
 
-  def validate_dirname(str) when is_binary(str) do
+  def validate_dirname(str) do
     cond do
       not is_binary(str) ->
         {:error, "must be a String (binary)"}
