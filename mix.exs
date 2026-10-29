@@ -8,9 +8,12 @@ defmodule FileCache.MixProject do
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: aliases(),
-      preferred_cli_env: [check: :test]
+      aliases: aliases()
     ]
+  end
+
+  def cli do
+    [preferred_envs: [check: :test]]
   end
 
   # Run "mix help compile.app" to learn about applications.

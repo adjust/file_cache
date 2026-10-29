@@ -13,7 +13,8 @@
         {Credo.Check.Design.TagTODO, false},
         {Credo.Check.Design.TagFIXME, false},
         {Credo.Check.Readability.AliasOrder, false},
-        {Credo.Check.Refactor.Apply, false}
+        {Credo.Check.Refactor.Apply, false},
+        {Credo.Check.Readability.ModuleDoc, false}
       ]
     }
   ]
