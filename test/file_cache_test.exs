@@ -345,7 +345,8 @@ defmodule FileCacheTest do
 
   describe "init option :ttl" do
     test "short-lived cache is deleted almost instantly" do
-      c = setup_cache(ttl: 1)
+      # Keep stale-file cleanup frequent enough to observe this 1 ms TTL.
+      c = setup_cache(ttl: 1, stale_clean_interval: 1)
       assert s = %File.Stream{} = FileCache.put!(binary(), @key, opts(c))
       wait_for_cleaning(2000)
       refute File.exists?(s.path)

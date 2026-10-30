@@ -15,6 +15,12 @@ defmodule FileCache.Cleaner do
   defmacro __using__(opts) do
     kind = Keyword.fetch!(opts, :kind)
 
+    interval_key =
+      case kind do
+        :stale -> :stale_clean_interval
+        :temp -> :temp_clean_interval
+      end
+
     quote do
       use GenServer
       @behaviour unquote(__MODULE__)
@@ -77,7 +83,7 @@ defmodule FileCache.Cleaner do
 
         timer =
           :erlang.start_timer(
-            Config.get(cache_name, :temp_clean_interval),
+            Config.get(cache_name, unquote(interval_key)),
             self(),
             :cleanup
           )
